@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ヒット&ブロー オンライン対戦</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>window.Peer||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"><\/script>')</script>
+<script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
+<style>
+:root{--bg:#1b1f2a;--pn:#262c3b;--in:#11151d;--tx:#f4f1ea;--mu:#aab3c5;--ac:#ff8a3d;box-sizing:border-box}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font-family:Arial,"Noto Sans JP",sans-serif}
+body{min-height:100vh}.app{max-width:430px;margin:auto;padding:20px 16px;display:flex;flex-direction:column;gap:14px;min-height:100vh}
+.pn{background:var(--pn);border-radius:14px;padding:10px}.t{font-size:13px;font-weight:700;color:var(--mu);margin-bottom:8px}
+.row{display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--in);border-radius:10px;margin-bottom:6px}
+.p{display:inline-flex;width:26px;height:26px;border-radius:50%;align-items:center;justify-content:center;flex:none;box-shadow:inset 0 -3px 0 rgba(0,0,0,.25)}
+.e{background:var(--in)!important;box-shadow:inset 0 0 0 2px #3a4357}.bd{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;font-weight:900;font-size:13px}
+.h{background:var(--ac);color:#1b1209;margin-left:auto}.bl{background:#f4f1ea;color:#1b1f2a}
+button{font:900 17px Arial,"Noto Sans JP",sans-serif;border:0;border-radius:14px;min-height:48px;cursor:pointer;color:var(--tx);background:#3a4357;padding:0 16px}
+button.m{background:var(--ac);color:#1b1209}button:disabled{opacity:.4;cursor:default}button.c{width:48px;height:48px;min-height:48px;padding:0;border-radius:50%;box-shadow:inset 0 -4px 0 rgba(0,0,0,.25)}
+input{height:48px;border-radius:14px;border:2px solid #3a4357;background:var(--in);color:var(--tx);padding:0 14px;font:700 18px Arial,"Noto Sans JP",sans-serif;width:100%;text-align:center;letter-spacing:4px}
+.n{background:#3a4357;color:#f4f1ea;font:900 15px/26px Arial,"Noto Sans JP",sans-serif;text-align:center}
+.ctr{text-align:center}.big{font-size:56px;font-weight:900;color:var(--ac);line-height:1.1}
+.status{font-size:13px;color:var(--mu);text-align:center;min-height:18px}
+.copy{font-size:12px;color:var(--mu);text-align:center;word-break:break-all}
+</style>
+</head>
+<body><main id="app" class="app"></main>
+<script>
+const COLORS=['#ef5350','#4d8dff','#3fb87f','#f7d94c','#b27cf5','#f4f1ea'];
+const NAMES=['赤','青','緑','黄','紫','白'];
+const L=4;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const initialCfg=()=>({tn:0,m:'c',lim:8,lm:1,sp:1,rk:1});
+const S={
+  screen:'home',cfg:initialCfg(),code:'',name:'',role:null,
+  peer:null,hostConn:null,connections:new Map(),isHost:false,
+  players:[],started:false,roomStarted:false,ready:false,oppReady:false,
+  secret:[],current:[],mine:[],theirs:[],turn:false,first:false,
+  pending:null,oppSecret:null,over:null,message:'',
+  tournament:{res:{},att:{s0:0,s1:0,f:0}},match:null,
+  spectators:new Map(),spectating:false,spectateLog:null,lb:[]
+};
+
+function num(){return S.cfg.m==='n'}
+function K(){return num()?10:6}
+function tok(c,s=26){
+  const z=`width:${s}px;height:${s}px;line-height:${s}px;font-size:${Math.round(s*.55)}px;`;
+  if(c==null)return `<i class="p e" style="${z}"></i>`;
+  return num()?`<i class="p n" style="${z}">${c}</i>`:`<i class="p" style="background:${COLORS[c]};${z}"></i>`;
+}
+function toks(g,s=26){return Array.from({length:L},(_,i)=>tok(g[i],s)).join('')}
+function score(secret,g){
+  let h=0,b=0;
+  g.forEach((c,i)=>{if(secret[i]===c)h++;else if(secret.includes(c))b++});
+  return [h,b];
+}
+function rows(list,n){
+  let o='';
+  for(let i=0;i<Math.max(list.length,n);i++){
+    const r=list[i];
+    o+=r?`<div class="row">${toks(r.g)}<span class="bd h">${r.h}</span><span class="bd bl">${r.b}</span></div>`:`<div class="row">${toks([])}</div>`;
+  }
+  return o;
+}
+function pal(attr,disabled){
+  return Array.from({length:K()},(_,i)=>`<button class="c" data-${attr}="${i}" aria-label="${num()?i:NAMES[i]}" style="${num()?'':'background:'+COLORS[i]}" ${disabled(i)?'disabled':''}>${num()?i:''}</button>`).join('');
+}
+function opt(k,v,t){
+  return `<button data-s="${k}" data-v="${v}" class="${String(S.cfg[k])===String(v)?'m':''}" style="flex:1;font-size:14px;padding:0 6px">${t}</button>`;
+}
+function grp(t,o){return `<div class="t" style="margin:8px 0 4px">${t}</div><div style="display:flex;gap:6px">${o}</div>`}
+function cfgTxt(c){
+  return `${c.tn?'トーナメント(4人)':'通常対戦'} / ${c.m==='n'?'数字4桁':'カラー4色'} / ${c.lim?c.lim+'手まで':'手数無制限'} / 後攻最終手${c.lm?'あり':'なし'}${c.tn?'':' / 観戦'+(c.sp?'可':'不可')} / ランキング${c.rk?'記録':'なし'}`;
+}
+function playerLabel(id){
+  const i=S.players.indexOf(id);
+  return id===S.peer?.id?'あなた':i>=0?'P'+(i+1):'未定';
+}
+function pairOf(id){
+  if(id==='s0')return [S.players[0],S.players[1]];
+  if(id==='s1')return [S.players[2],S.players[3]];
+  return [S.tournament.res.s0,S.tournament.res.s1];
+}
+function myMatch(){
+  return ['s0','s1','f'].find(id=>{
+    const p=pairOf(id);return p.every(Boolean)&&p.includes(S.peer?.id)&&!S.tournament.res[id]
+  })||null;
+}
+function render(){
+  let h='<h1 class="ctr" style="margin:0;font-size:28px">ヒット&amp;ブロー</h1>';
+  const sc=S.screen;
+  if(sc==='home'){
+    h+=`<div class="ctr" style="display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:12px">
+      <div style="width:96px;height:96px;border-radius:22px;background:#262c3b;display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:19px">
+        ${COLORS.slice(0,4).map(c=>`<i style="background:${c};border-radius:50%"></i>`).join('')}
+      </div><h1 style="margin:0;font-size:32px">ヒット&amp;ブロー</h1>
+      <div style="color:var(--mu)">相手の色(数字)を先に当てよう</div>
+    </div>
+    <div class="pn"><div class="t">プレイヤー名（任意）</div><input id="name" maxlength="12" value="${esc(S.name)}" placeholder="名前"></div>
+    <button class="m" id="m2" style="min-height:64px">2人で対戦<br><small style="font-weight:500">友達と1対1</small></button>
+    <button id="m4" style="min-height:64px;background:#4d8dff;color:#0b1020">トーナメント(4人)<br><small style="font-weight:500">準決勝・決勝で優勝を決める</small></button>
+    <div class="pn"><div class="t">この端末のランキング(勝利数)</div>${renderLB()}</div>`;
+  }else if(sc==='lobby'){
+    const bad=/できません|見つかりません|エラー|切れ|読み込めません|タイムアウト|NG/.test(S.message);
+    h+=`<div class="ctr" style="font-weight:900;font-size:20px">${S.cfg.tn?'トーナメント(4人)':'2人で対戦'}</div>
+    ${S.message?`<div class="pn ctr" style="font-weight:700;font-size:14px;line-height:1.5;border:2px solid ${bad?'#ef5350':'var(--ac)'};word-break:break-all">${S.connecting?'⏳ ':bad?'⚠️ ':''}${esc(S.message)}</div>`:''}
+    <div style="font-size:11px;color:var(--mu);text-align:center">${esc(S.diag||'')}</div>
+    <button class="m" id="mk" style="min-height:56px" ${S.connecting?'disabled':''}>ルームを作る<br><small style="font-weight:500">コードを自動で発行します</small></button>
+    <div class="ctr" style="color:var(--mu);font-size:13px">― または、友達のルームに入る ―</div>
+    <label class="t" for="cd">ルームコード</label><input id="cd" maxlength="8" inputmode="numeric" value="${esc(S.code)}" placeholder="友達から聞いたコード">
+    <button id="go" ${S.connecting?'disabled':''}>入室する</button>
+    <button id="bk" style="background:transparent;box-shadow:inset 0 0 0 2px #3a4357">ホームに戻る</button>
+    `;
+  }else if(sc==='room'){
+    const need=S.cfg.tn?4:2;
+    h+=`<div class="pn"><div class="t">ルーム ${esc(S.code)} / 参加中 ${S.players.length}人</div>
+    ${S.isHost?grp('形式',opt('m','c','カラー')+opt('m','n','数字'))+
+      grp('手数制限',opt('lim',6,'6手')+opt('lim',8,'8手')+opt('lim',10,'10手')+opt('lim',0,'無制限'))+
+      grp('後攻の最終手',opt('lm',1,'あり')+opt('lm',0,'なし'))+
+      (!S.cfg.tn?grp('観戦',opt('sp',1,'許可')+opt('sp',0,'不可')):'')+
+      grp('ランキング',opt('rk',1,'記録')+opt('rk',0,'記録しない'))
+      :`<div>${cfgTxt(S.cfg)}</div>`}</div>
+      <div class="pn"><div class="t">参加者</div>${S.players.map((p,i)=>`<div style="padding:3px 0">${i+1}. ${esc(S.peerNames?.get(p)||playerLabel(p))}${p===S.peer.id?'（あなた）':''}</div>`).join('')}</div>
+      ${S.isHost?`<button class="m" id="start" ${S.players.length<need?'disabled':''}>${S.players.length<need?`あと${need-S.players.length}人待っています`:'この設定で開始'}</button>`:'<div class="ctr" style="color:var(--mu)">ホストの開始を待っています…</div>'}
+      <div class="copy">相手にはルームコード「${esc(S.code)}」を伝えてください</div>`;
+  }else if(sc==='full'){
+    h+='<div class="pn ctr">このルームは満員、または観戦不可です</div><button id="homeBtn">ホームへ</button>';
+  }else if(sc==='brk'){
+    const R=S.tournament.res,m=myMatch();
+    h+=`<div class="pn"><div class="t">トーナメント表</div>`;
+    [['準決勝1','s0'],['準決勝2','s1'],['決勝','f']].forEach(([n,id])=>{
+      const p=pairOf(id);h+=`<div style="display:flex;justify-content:space-between;padding:6px 0"><span>${n}: ${playerLabel(p[0])} vs ${playerLabel(p[1])}</span><b>${R[id]?'勝者 '+playerLabel(R[id]):'-'}</b></div>`;
+    });
+    h+=`</div>${R.f?`<div class="pn ctr"><div class="big">${R.f===S.peer.id?'優勝!':'終了'}</div><div class="t">優勝: ${playerLabel(R.f)}</div></div>`:
+      m?`<button class="m" id="gm" data-m="${m}">${m==='f'?'決勝へ':'試合を始める'}</button>`:'<div class="ctr" style="color:var(--mu)">他の試合の結果を待っています…</div>'}`;
+  }else if(sc==='setup'){
+    h+=`<div class="ctr" style="color:var(--mu)">${cfgTxt(S.cfg)}${S.cfg.tn?' ('+S.match+')':''}</div>
+    <div class="pn ctr"><div class="t">あなたの答え(${num()?'数字4桁':'4色'}・重複なし)</div><div style="display:flex;justify-content:center;gap:10px">${toks(S.secret,44)}</div></div>
+    <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap">${pal('c',i=>S.secret.includes(i)||S.ready)}</div>
+    <div style="display:flex;gap:8px"><button id="clr" style="flex:1" ${S.ready?'disabled':''}>やり直す</button><button class="m" id="ok" style="flex:2" ${S.secret.length<L||S.ready?'disabled':''}>決定</button></div>
+    <div class="status">${S.ready&&!S.oppReady?'相手の準備を待っています…':''}</div>`;
+  }else if(sc==='spec'){
+    const g=S.spectateLog;
+    h+=`<div class="ctr" style="color:var(--mu)">観戦中 ${g?cfgTxt(g.cfg):''}</div>`;
+    if(!g)h+='<div class="pn ctr">対戦の更新を待っています…</div>';
+    else h+=`<div style="display:flex;gap:10px"><div class="pn" style="flex:1"><div class="t">プレイヤーA(先攻)</div>${rows(g.a,g.cfg.lim||6)}</div><div class="pn" style="flex:1"><div class="t">プレイヤーB</div>${rows(g.b,g.cfg.lim||6)}</div></div>${g.over?`<div class="pn ctr big">${g.over==='draw'?'引き分け':g.over==='win'?'Aの勝ち':'Bの勝ち'}</div>`:''}`;
+  }else{
+    const lim=S.cfg.lim;
+    h+=`<div class="ctr"><span style="background:${S.turn&&!S.over?'var(--ac)':'#3a4357'};color:${S.turn&&!S.over?'#1b1209':'var(--tx)'};border-radius:20px;padding:6px 16px;font-weight:900">${S.over?'対戦終了':S.turn?'あなたの番':'相手の番'}${lim&&!S.over?` (${S.mine.length}/${lim}手)`:''}</span></div>
+    <div style="display:flex;gap:10px"><div class="pn" style="flex:1"><div class="t">あなたの推理</div>${rows(S.mine,lim||6)}</div><div class="pn" style="flex:1"><div class="t">相手の推理</div>${rows(S.theirs,lim||6)}</div></div>`;
+    if(S.over)h+=`<div class="pn ctr"><div class="big">${{win:'WIN',lose:'LOSE',draw:'DRAW'}[S.over]}</div><div class="t" style="margin-top:8px">相手の答え</div><div style="display:flex;justify-content:center;gap:8px">${S.oppSecret?toks(S.oppSecret,36):'…'}</div></div>${S.cfg.tn?(S.over==='draw'?'<button class="m" id="rem">引き分けのため再戦</button>':'<button class="m" id="tb">トーナメント表へ</button>'):'<button class="m" id="again">もう一回</button>'}`;
+    else h+=`<div class="pn"><div style="display:flex;justify-content:center;gap:10px;margin-bottom:10px">${toks(S.current,40)}</div>
+      <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">${pal('g',i=>S.current.includes(i)||!S.turn)}</div>
+      <div style="display:flex;gap:8px"><button id="del" style="flex:1" ${S.turn?'':'disabled'}>消す</button><button class="m" id="sub" style="flex:2" ${S.turn&&S.current.length===L?'':'disabled'}>この組み合わせで推理</button></div></div>`;
+  }
+  $('app').innerHTML=h;bind();
+}
+function renderLB(){
+  const lb=JSON.parse(localStorage.getItem('hb-rank')||'[]');
+  return lb.length?lb.slice(0,10).map((r,i)=>`<div style="display:flex;justify-content:space-between;padding:4px 2px"><span>${i+1}. ${esc(r.n)}</span><span>${r.w}勝 ${r.l}敗 ${r.d}分</span></div>`).join(''):'<div style="color:var(--mu)">まだ記録がありません</div>';
+}
+function record(r){
+  if(!S.cfg.rk)return;
+  const key=(S.name||'名無し').trim()||'名無し';
+  let lb=JSON.parse(localStorage.getItem('hb-rank')||'[]');
+  let x=lb.find(a=>a.n===key);if(!x){x={n:key,w:0,l:0,d:0};lb.push(x)}
+  x[r==='win'?'w':r==='lose'?'l':'d']++;
+  lb.sort((a,b)=>b.w-a.w||a.l-b.l);localStorage.setItem('hb-rank',JSON.stringify(lb.slice(0,50)));
+}
+function resetGame(){
+  Object.assign(S,{secret:[],current:[],mine:[],theirs:[],turn:false,first:false,ready:false,oppReady:false,pending:null,oppSecret:null,over:null});
+}
+function send(msg){
+  if(S.isHost){
+    for(const c of S.connections.values())if(c.open)c.send(msg);
+  }else if(S.hostConn?.open)S.hostConn.send(msg);
+}
+function broadcast(msg,except){
+  for(const [id,c] of S.connections)if(id!==except&&c.open)c.send(msg);
+}
+function statePacket(){return {type:'state',players:S.players,cfg:S.cfg,names:[...S.peerNames.entries()]}}
+function hostBroadcastState(){if(S.isHost)broadcast(statePacket())}
+function peerName(id){return S.peerNames?.get(id)||playerLabel(id)}
+function errText(e){
+  const t=e?.type||'';
+  if(t==='nolib')return '通信ライブラリ(PeerJS)を読み込めませんでした。ネット接続・広告ブロック・ページの通信制限を確認してください';
+  if(t==='timeout')return '接続サーバーから応答がありません(タイムアウト)。ネットワークを確認して再試行してください';
+  if(['network','server-error','socket-error','socket-closed'].includes(t))return '接続サーバー(PeerJS)に接続できません。ネットワークやセキュリティ設定を確認してください ['+t+']';
+  return '接続エラー ['+(t||'error')+'] '+(e?.message||'');
+}
+function openPeer(id){
+  return new Promise((res,rej)=>{
+    if(typeof Peer==='undefined'){rej({type:'nolib'});return}
+    let p;
+    try{p=id?new Peer(id):new Peer()}catch(e){rej({type:'init',message:String(e&&e.message||e)});return}
+    const to=setTimeout(()=>{try{p.destroy()}catch(_){}rej({type:'timeout'})},15000);
+    p.on('open',()=>{clearTimeout(to);res(p)});
+    p.on('error',e=>{clearTimeout(to);try{p.destroy()}catch(_){}rej(e)});
+  });
+}
+function hostAccept(c){
+  if(S.connections.size >= (S.cfg.tn?3:1)){c.on('open',()=>c.send({type:'full'}));return}
+  c.on('open',()=>{
+    S.connections.set(c.peer,c);
+    S.peerNames.set(c.peer,c.metadata?.name||'名無し');
+    if(!S.players.includes(c.peer))S.players.push(c.peer);
+    c.send(statePacket());render();
+    c.on('data',d=>hostData(c,d));c.on('close',()=>hostDisconnect(c.peer));
+  });
+}
+function hostDisconnect(id){
+  S.connections.delete(id);S.players=S.players.filter(p=>p!==id);render();hostBroadcastState();
+}
+function hostData(c,d){
+  if(!d||!d.type)return;
+  if(d.type==='hello'){S.peerNames.set(c.peer,d.name||'名無し');c.send(statePacket());render();return}
+  if(d.type==='cfg'&&S.isHost&&!S.started){S.cfg=d.cfg;hostBroadcastState();render();return}
+  if(d.type==='go'&&S.isHost){applyStart(d);broadcast(d);return}
+  if(d.type==='ready'&&S.started){gameRelay(c,d);return}
+  if(d.type==='guess'&&S.started){gameRelay(c,d);return}
+  if(d.type==='result'&&S.started){gameRelay(c,d);return}
+  if(d.type==='reveal'&&S.started){gameRelay(c,d);return}
+  if(d.type==='again'&&S.started){gameRelay(c,d);return}
+  if(d.type==='tw'){S.tournament.res[d.id]=d.w;broadcast(d);render();return}
+  if(d.type==='log'){broadcast(d,c.peer);return}
+}
+function gameRelay(c,d){
+  const p=S.players.find(x=>x!==c.peer);
+  if(p===S.peer.id){handleClientData(d);return}
+  const target=S.connections.get(p);
+  if(target?.open)target.send(d);
+}
+async function runDiag(){
+  S.diag='接続診断中…';
+  const lib=typeof Peer!=='undefined';
+  let srv='確認中';
+  if(typeof render==='function'&&S.screen==='lobby')render();
+  try{
+    const t=performance.now();
+    const ctl=new AbortController();const to=setTimeout(()=>ctl.abort(),8000);
+    await fetch('https://0.peerjs.com/peerjs/id?ts='+Date.now(),{mode:'no-cors',cache:'no-store',signal:ctl.signal});
+    clearTimeout(to);srv='OK('+Math.round(performance.now()-t)+'ms)';
+  }catch(e){srv='NG(到達できません)'}
+  S.diag='診断: ライブラリ '+(lib?'OK':'NG')+' / 接続サーバー '+srv;
+  if(S.screen==='lobby')render();
+}
+function leavePeer(){
+  try{S.peer?.destroy()}catch(_){}
+  S.peer=null;S.hostConn=null;S.connections=new Map();S.players=[];
+  S.peerNames=new Map();S.isHost=false;S.started=false;S.roomStarted=false;
+}
+async function createRoom(){
+  if(S.connecting)return;
+  S.name=($('name')?.value||S.name).trim()||'名無し';
+  S.connecting=true;S.message='ルームを作成中…';render();
+  leavePeer();
+  for(let i=0;i<5;i++){
+    const code=String(Math.floor(100000+Math.random()*900000));
+    try{
+      const p=await openPeer(`hb-${code}`);
+      S.peer=p;S.isHost=true;S.code=code;S.peerNames=new Map();
+      S.players=[p.id];S.peerNames.set(p.id,S.name);
+      p.on('connection',c=>hostAccept(c));
+      p.on('error',e=>{S.message=errText(e);render()});
+      S.connecting=false;S.message='';S.screen='room';render();
+      return;
+    }catch(e){
+      if(e?.type==='unavailable-id')continue; // コードが重複 → 別のコードで再試行
+      S.connecting=false;S.message='ルームを作成できません: '+errText(e);
+      render();return;
+    }
+  }
+  S.connecting=false;S.message='ルームを作成できませんでした。もう一度お試しください';render();
+}
+async function joinRoom(){
+  if(S.connecting)return;
+  S.name=($('name')?.value||S.name).trim()||'名無し';
+  if(!S.code){S.message='ルームコードを入力してください';render();return}
+  S.connecting=true;S.message='接続中…';render();
+  leavePeer();
+  const hostId=`hb-${S.code}`;
+  const fail=msg=>{if(S.connecting){S.connecting=false;S.message=msg;leavePeer();S.screen='lobby';render()}};
+  try{
+    const p=await openPeer();
+    S.peer=p;S.isHost=false;S.peerNames=new Map();
+    const c=p.connect(hostId,{reliable:true,metadata:{name:S.name}});
+    S.hostConn=c;
+    const to=setTimeout(()=>fail('ルームが見つかりません。コードを確認してください'),10000);
+    p.on('error',e=>{clearTimeout(to);fail(e.type==='peer-unavailable'?'ルームが見つかりません。コードを確認してください':errText(e))});
+    c.on('open',()=>{
+      clearTimeout(to);S.connecting=false;S.message='';
+      c.send({type:'hello',name:S.name});S.screen='room';render();
+    });
+    c.on('data',handleClientData);
+    c.on('close',()=>{clearTimeout(to);if(S.connecting){fail('ルームに接続できませんでした');return}S.message='ホストとの接続が切れました';leavePeer();S.screen='home';render()});
+    c.on('error',()=>{clearTimeout(to);fail('ルームに接続できませんでした')});
+  }catch(e){
+    fail(errText(e));
+  }
+}
+function handleClientData(d){
+  if(!d)return;
+  if(d.type==='full'){S.screen='full';render();return}
+  if(d.type==='state'){
+    S.players=d.players;S.cfg=d.cfg;S.peerNames=new Map(d.names||[]);
+    S.isHost=false;render();return
+  }
+  if(d.type==='go'){applyStart(d);return}
+  if(d.type==='again'){resetGame();S.screen='setup';render();return}
+  if(d.type==='ready'){S.oppReady=true;startGameIfReady();return}
+  if(d.type==='guess')receiveGuess(d); 
+  else if(d.type==='result')receiveResult(d);
+  else if(d.type==='reveal'){S.oppSecret=d.s;render()}
+  else if(d.type==='tw'){S.tournament.res[d.id]=d.w;render()}
+  else if(d.type==='log'){if(S.screen==='spec'){S.spectateLog=d;render()}}
+}
+function applyStart(d){
+  S.started=true;S.roomStarted=true;S.cfg=d.cfg;S.players=d.players||S.players;
+  if(S.cfg.tn){S.tournament={res:{},att:{s0:0,s1:0,f:0}};S.screen='brk'}
+  else{
+    const i=S.players.indexOf(S.peer.id);
+    if(i<0){S.screen=S.cfg.sp?'spec':'full';return}
+    S.role=i===0?'host':'guest';S.first=i===0;resetGame();S.screen='setup'
+    if(!S.isHost)S.hostConn?.send({type:'hello',name:S.name});
+  }
+  render();
+}
+function doStart(){
+  const need=S.cfg.tn?4:2;if(S.players.length<need)return;
+  const d={type:'go',cfg:{...S.cfg},players:S.players.slice(0,need)};
+  applyStart(d);if(S.isHost)broadcast(d);
+}
+function goMatch(id){
+  const p=pairOf(id);if(!p.every(Boolean))return;
+  S.match=id;resetGame();S.screen='setup';
+  S.first=p[0]===S.peer.id;
+  if(S.isHost){
+    S.currentMatchPlayers=p;
+    broadcast({type:'match',id,players:p,att:S.tournament.att[id]});
+  }else S.hostConn?.send({type:'match',id,players:p,att:S.tournament.att[id]});
+  render();
+}
+function confirmSecret(){
+  S.ready=true;
+  send({type:'ready',s:S.secret});
+  startGameIfReady();
+}
+function startGameIfReady(){
+  if(S.ready&&S.oppReady&&S.secret.length===L){S.screen='battle';S.turn=S.first;render();sendLog()}
+}
+function submitGuess(){
+  S.pending=S.current.slice();S.current=[];S.turn=false;send({type:'guess',g:S.pending});render()
+}
+function receiveGuess(d){
+  const [h,b]=score(S.secret,d.g);S.theirs.push({g:d.g,h,b});send({type:'result',h,b});settle();render()
+}
+function receiveResult(d){
+  S.mine.push({g:S.pending,h:d.h,b:d.b});settle();render()
+}
+function settle(){
+  const f=S.first?S.mine.length:S.theirs.length,s=S.first?S.theirs.length:S.mine.length;
+  const mc=S.mine.some(r=>r.h===L),oc=S.theirs.some(r=>r.h===L);let r=null;
+  if((mc||oc)&&(!S.cfg.lm||s>=f))r=mc&&oc?'draw':mc?'win':'lose';
+  else if(S.cfg.lim&&f>=S.cfg.lim&&s>=S.cfg.lim)r='draw';
+  if(r){
+    S.over=r;S.turn=false;send({type:'reveal',s:S.secret});
+    record(r);
+    if(S.cfg.tn&&S.match){
+      if(r==='draw')S.tournament.att[S.match]++;
+      else if(r==='win'){S.tournament.res[S.match]=S.peer.id;send({type:'tw',id:S.match,w:S.peer.id})}
+    }
+  }else S.turn=S.first?f===s:f>s;
+  sendLog();
+}
+function sendLog(){
+  const log={type:'log',a:S.mine,b:S.theirs,cfg:S.cfg,over:S.over};
+  send(log)
+}
+function bind(){
+  const on=(id,fn)=>{const e=$(id);if(e)e.onclick=fn};
+  on('m2',()=>{S.cfg.tn=0;S.screen='lobby';render()});
+  on('m4',()=>{S.cfg.tn=1;S.screen='lobby';render()});
+  on('mk',createRoom);
+  on('go',joinRoom);on('bk',()=>{leavePeer();S.connecting=false;S.message='';S.screen='home';render()});on('homeBtn',()=>{leavePeer();S.screen='home';render()});
+  on('start',doStart);on('gm',()=>goMatch($('gm').dataset.m));
+  on('tb',()=>{S.screen='brk';render()});
+  on('rem',()=>{if(S.match)goMatch(S.match)});
+  on('again',()=>{resetGame();S.screen='setup';render();send({type:'again'})});
+  on('clr',()=>{S.secret=[];render()});on('ok',confirmSecret);
+  on('del',()=>{S.current.pop();render()});on('sub',submitGuess);
+  const name=$('name');if(name)name.oninput=()=>S.name=name.value;
+  const cd=$('cd');if(cd)cd.oninput=()=>S.code=cd.value.trim();
+  document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.s;S.cfg[k]=k==='m'?b.dataset.v:+b.dataset.v;
+    if(S.isHost)hostBroadcastState();render()
+  });
+  document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{if(S.secret.length<L){S.secret.push(+b.dataset.c);render()}});
+  document.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>{if(S.current.length<L){S.current.push(+b.dataset.g);render()}});
+}
+S.peerNames=new Map();
+render();
+</script></body></html>
